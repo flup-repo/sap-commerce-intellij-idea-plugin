@@ -1,6 +1,6 @@
 /*
  * This file is part of "SAP Commerce Developers Toolset" plugin for IntelliJ IDEA.
- * Copyright (C) 2019-2025 EPAM Systems <hybrisideaplugin@epam.com> and contributors
+ * Copyright (C) 2019-2026 EPAM Systems <hybrisideaplugin@epam.com> and contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as
@@ -53,11 +53,13 @@ import javax.swing.JLabel
 abstract class ConnectionSettingsDialog<M : ExecConnectionSettingsState.Mutable>(
     protected val project: Project,
     parentComponent: Component,
+    private val original: M,
     protected val mutable: M,
-    dialogTitle: String
+    dialogTitle: String,
 ) : DialogWrapper(project, parentComponent, true, IdeModalityType.IDE) {
 
     protected val editableCredentials = AtomicBooleanProperty(false)
+    protected val editableProxyCredentials = AtomicBooleanProperty(false)
     protected lateinit var connectionNameTextField: JBTextField
     protected lateinit var hostTextField: JBTextField
     protected lateinit var portTextField: JBTextField
@@ -119,6 +121,7 @@ abstract class ConnectionSettingsDialog<M : ExecConnectionSettingsState.Mutable>
 
     protected abstract suspend fun testConnection(): String?
     protected abstract fun panel(): DialogPanel
+    protected abstract fun apply(original: M, mutable: M)
     protected abstract fun retrieveCredentials(mutable: M): Credentials
     protected open fun retrieveProxyCredentials(mutable: M): Credentials? = null
 
@@ -139,29 +142,23 @@ abstract class ConnectionSettingsDialog<M : ExecConnectionSettingsState.Mutable>
 
     override fun applyFields() {
         super.applyFields()
-        // always modified if user clicked Apply button
-        mutable.modified = true
+        apply(original, mutable)
     }
 
     private fun loadCredentials() {
-        if (mutable.modified) {
-            editableCredentials.set(true)
-            return
-        }
-
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Retrieving credentials", false) {
+        if (mutable.credentials.loaded) editableCredentials.set(true)
+        else ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Retrieving credentials", false) {
             override fun run(indicator: ProgressIndicator) {
-
-                with(retrieveCredentials(mutable)) {
-                    mutable.username.set(userName ?: "")
-                    mutable.password.set(getPasswordAsString() ?: "")
-                }
-                with(retrieveProxyCredentials(mutable)) {
-                    mutable.proxyUsername.set(this?.userName ?: "")
-                    mutable.proxyPassword.set(this?.getPasswordAsString() ?: "")
-                }
-
+                mutable.credentials.load(retrieveCredentials(mutable))
                 editableCredentials.set(true)
+            }
+        })
+
+        if (mutable.proxyCredentials.loaded) editableProxyCredentials.set(true)
+        else ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Retrieving proxy credentials", false) {
+            override fun run(indicator: ProgressIndicator) {
+                mutable.proxyCredentials.load(retrieveProxyCredentials(mutable))
+                editableProxyCredentials.set(true)
             }
         })
     }

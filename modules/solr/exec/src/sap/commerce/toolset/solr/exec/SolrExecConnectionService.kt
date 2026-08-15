@@ -1,6 +1,6 @@
 /*
  * This file is part of "SAP Commerce Developers Toolset" plugin for IntelliJ IDEA.
- * Copyright (C) 2019-2025 EPAM Systems <hybrisideaplugin@epam.com> and contributors
+ * Copyright (C) 2019-2026 EPAM Systems <hybrisideaplugin@epam.com> and contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as
@@ -23,9 +23,8 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import sap.commerce.toolset.exec.ExecConnectionService
-import sap.commerce.toolset.exec.settings.state.ExecConnectionCredentials
 import sap.commerce.toolset.exec.settings.state.ExecConnectionScope
-import sap.commerce.toolset.exec.settings.state.obsoleteFor
+import sap.commerce.toolset.settings.state.Mutation
 import sap.commerce.toolset.solr.SolrConstants
 import sap.commerce.toolset.solr.exec.settings.SolrExecDeveloperSettings
 import sap.commerce.toolset.solr.exec.settings.SolrExecProjectSettings
@@ -33,7 +32,7 @@ import sap.commerce.toolset.solr.exec.settings.event.SolrConnectionSettingsListe
 import sap.commerce.toolset.solr.exec.settings.state.SolrConnectionSettingsState
 
 @Service(Service.Level.PROJECT)
-class SolrExecConnectionService(project: Project) : ExecConnectionService<SolrConnectionSettingsState>(project) {
+class SolrExecConnectionService(project: Project) : ExecConnectionService<SolrConnectionSettingsState, SolrConnectionSettingsState.Snapshot>(project) {
 
     private val lock = Any()
 
@@ -60,53 +59,56 @@ class SolrExecConnectionService(project: Project) : ExecConnectionService<SolrCo
     override val listener: SolrConnectionSettingsListener
         get() = project.messageBus.syncPublisher(SolrConnectionSettingsListener.TOPIC)
 
-    override fun create(settings: Pair<SolrConnectionSettingsState, ExecConnectionCredentials?>, notify: Boolean) = when (settings.first.scope) {
+    override fun create(snapshot: SolrConnectionSettingsState.Snapshot, notify: Boolean) = when (snapshot.state.scope) {
         ExecConnectionScope.PROJECT_PERSONAL -> with(SolrExecDeveloperSettings.getInstance(project)) {
-            connections = connections + settings.first
+            connections = connections + snapshot.state
 
-            onCreate(settings, notify)
+            onCreate(snapshot, notify)
         }
 
         ExecConnectionScope.PROJECT -> with(SolrExecProjectSettings.getInstance(project)) {
-            connections = connections + settings.first
+            connections = connections + snapshot.state
 
-            onCreate(settings, notify)
+            onCreate(snapshot, notify)
         }
     }
 
-    override fun delete(settings: SolrConnectionSettingsState, notify: Boolean, purgeCredentials: Boolean) {
+    override fun delete(state: SolrConnectionSettingsState) {
         val developerSettings = SolrExecDeveloperSettings.getInstance(project)
         val projectSettings = SolrExecProjectSettings.getInstance(project)
         developerSettings.connections = developerSettings.connections
-            .filterNot { it.uuid == settings.uuid }
+            .filterNot { it.uuid == state.uuid }
         projectSettings.connections = projectSettings.connections
-            .filterNot { it.uuid == settings.uuid }
-
-        onDelete(settings, notify, purgeCredentials)
+            .filterNot { it.uuid == state.uuid }
     }
 
     override fun default() = SolrConnectionSettingsState(
         port = getPropertyOrDefault(project, SolrConstants.PROPERTY_SOLR_DEFAULT_PORT, "8983"),
     )
 
-    override fun save(settings: Map<SolrConnectionSettingsState, ExecConnectionCredentials?>) {
-        val groupedSettings = settings.keys.groupBy { it.scope }
+    override fun save(snapshots: Collection<SolrConnectionSettingsState.Snapshot>) {
+        val groupedSettings = snapshots
+            .filter { it.mutation == Mutation.SAVE }
+            .map { it.state }
+            .groupBy { it.scope }
             .mapValues { (_, v) -> v.toList() }
         val projectSettings = SolrExecProjectSettings.getInstance(project)
         val developerSettings = SolrExecDeveloperSettings.getInstance(project)
 
-        // remove persisted credentials only for the connections which are gone
+        // remove persisted credentials only f or the connections which are gone
+        val statesToSave = snapshots.map { it.state.uuid }
+
         (projectSettings.connections + developerSettings.connections)
-            .obsoleteFor(settings.keys)
+            .filterNot { statesToSave.contains(it.uuid) }
             .forEach { removeCredentials(it) }
 
         projectSettings.connections = groupedSettings.getOrElse(ExecConnectionScope.PROJECT) { emptyList() }
         developerSettings.connections = groupedSettings.getOrElse(ExecConnectionScope.PROJECT_PERSONAL) { emptyList() }
 
-        onSave(settings)
+        onSave(snapshots)
     }
 
-    override fun defaultCredentials(settings: SolrConnectionSettingsState) = Credentials(
+    override fun defaultCredentials() = Credentials(
         getPropertyOrDefault(project, SolrConstants.PROPERTY_SOLR_DEFAULT_USER, "solrserver"),
         getPropertyOrDefault(project, SolrConstants.PROPERTY_SOLR_DEFAULT_PASSWORD, "server123")
     )

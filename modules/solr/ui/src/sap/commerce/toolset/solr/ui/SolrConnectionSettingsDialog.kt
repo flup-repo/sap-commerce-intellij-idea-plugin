@@ -39,7 +39,7 @@ class SolrConnectionSettingsDialog(
     parentComponent: Component,
     settings: SolrConnectionSettingsState.Mutable,
     dialogTitle: String,
-) : ConnectionSettingsDialog<SolrConnectionSettingsState.Mutable>(project, parentComponent, settings, dialogTitle) {
+) : ConnectionSettingsDialog<SolrConnectionSettingsState.Mutable>(project, parentComponent, settings, settings.copy(), dialogTitle) {
 
     private lateinit var urlPreviewLabel: JLabel
     private lateinit var timeoutIntSpinner: JBIntSpinner
@@ -48,7 +48,7 @@ class SolrConnectionSettingsDialog(
     private lateinit var socketTimeoutIntSpinner: JBIntSpinner
 
     override fun retrieveCredentials(mutable: SolrConnectionSettingsState.Mutable) = SolrExecConnectionService.getInstance(project)
-        .getCredentials(mutable.immutable().first)
+        .getCredentials(mutable.uuid)
 
     override suspend fun testConnection(): String? = try {
         val testSettings = SolrConnectionSettingsState(
@@ -62,13 +62,27 @@ class SolrConnectionSettingsDialog(
 
         SolrExecClient.getInstance(project).testConnection(
             testSettings,
-            mutable.username.get(),
-            mutable.password.get(),
+            mutable.credentials.username.get(),
+            mutable.credentials.password.get(),
         )
 
         null
     } catch (e: Exception) {
         e.message ?: ""
+    }
+
+    override fun apply(original: SolrConnectionSettingsState.Mutable, mutable: SolrConnectionSettingsState.Mutable) = with(original) {
+        apply(mutable, { it.scope }, { scope = it })
+        apply(mutable, { it.timeout }, { timeout = it })
+        apply(mutable, { it.socketTimeout }, { socketTimeout = it })
+        apply(mutable, { it.name.get() }, { name.set(it) })
+        apply(mutable, { it.host.get() }, { host.set(it) })
+        apply(mutable, { it.port.get() }, { port.set(it) })
+        apply(mutable, { it.webroot.get() }, { webroot.set(it) })
+        apply(mutable, { it.ssl.get() }, { ssl.set(it) })
+
+        apply(mutable, { it.credentials } , { credentials.apply(it) })
+        apply(mutable, { it.proxyCredentials } , { proxyCredentials.apply(it) })
     }
 
     override fun panel() = panel {
@@ -165,14 +179,14 @@ class SolrConnectionSettingsDialog(
             row {
                 usernameTextField = textField()
                     .label("Username:")
-                    .bindText(mutable.username)
+                    .bindText(mutable.credentials.username)
                     .enabledIf(editableCredentials)
                     .addValidationRule("Username cannot be blank.") { it.text.isNullOrBlank() }
                     .component
 
                 passwordTextField = passwordField()
                     .label("Password:")
-                    .bindText(mutable.password)
+                    .bindText(mutable.credentials.password)
                     .enabledIf(editableCredentials)
                     .addValidationRule("Password cannot be blank.") { it.password.isEmpty() }
                     .component

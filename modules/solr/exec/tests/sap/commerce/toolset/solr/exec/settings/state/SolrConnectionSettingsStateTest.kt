@@ -18,45 +18,46 @@
 
 package sap.commerce.toolset.solr.exec.settings.state
 
+import sap.commerce.toolset.settings.state.Mutation
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 
 /**
- * Unit tests for [SolrConnectionSettingsState.Mutable.immutable].
+ * Unit tests for [SolrConnectionSettingsState.Mutable.snapshot].
  *
  * Credentials of a connection are loaded lazily by the connection dialog, therefore an untouched `Mutable`
  * carries blank credentials which must never reach the credential store.
  */
 class SolrConnectionSettingsStateTest {
 
-    private fun mutable(host: String = "localhost") = SolrConnectionSettingsState(host = host).mutable()
+    private fun fixture(host: String = "localhost") = SolrConnectionSettingsState(host = host).mutable()
 
     @Test
     fun immutable_notModified_hasNoCredentials() {
-        val (_, credentials) = mutable().immutable()
+        val fixture = fixture().snapshot()
 
-        assertNull(credentials)
+        assertEquals(Mutation.NONE, fixture.mutation)
+        assertEquals(Mutation.NONE, fixture.credentials.mutation)
     }
 
     @Test
     fun immutable_notModified_stillHasSettings() {
-        val (settings, _) = mutable(host = "solr.example.com").immutable()
+        val fixture = fixture(host = "solr.example.com").snapshot()
 
-        assertEquals("solr.example.com", settings.host)
+        assertEquals("solr.example.com", fixture.state.host)
     }
 
     @Test
     fun immutable_modified_hasCredentials() {
-        val mutable = mutable().apply {
-            username.set("solr")
-            password.set("solrRocks")
-            modified = true
+        val fixture = fixture().apply {
+            credentials.apply("solr", "solrRocks")
         }
 
-        val credentials = assertNotNull(mutable.immutable().second).credentials
+        val execCredentials = assertNotNull(fixture.snapshot().credentials)
+        val credentials = execCredentials.credentials
 
+        assertEquals(Mutation.SAVE, execCredentials.mutation)
         assertEquals("solr", credentials.userName)
         assertEquals("solrRocks", credentials.getPasswordAsString())
     }

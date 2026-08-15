@@ -65,7 +65,7 @@ class HacConnectionSettingsDialog(
     parentComponent: Component,
     settings: HacConnectionSettingsState.Mutable,
     dialogTitle: String,
-) : ConnectionSettingsDialog<HacConnectionSettingsState.Mutable>(project, parentComponent, settings, dialogTitle) {
+) : ConnectionSettingsDialog<HacConnectionSettingsState.Mutable>(project, parentComponent, settings, settings.copy(), dialogTitle) {
 
     private lateinit var urlPreviewLabel: JLabel
     private lateinit var timeoutIntSpinner: JBIntSpinner
@@ -83,10 +83,10 @@ class HacConnectionSettingsDialog(
     }
 
     override fun retrieveCredentials(mutable: HacConnectionSettingsState.Mutable) = HacExecConnectionService.getInstance(project)
-        .getCredentials(mutable.immutable().first)
+        .getCredentials(mutable.uuid)
 
     override fun retrieveProxyCredentials(mutable: HacConnectionSettingsState.Mutable) = HacExecConnectionService.getInstance(project)
-        .getProxyCredentials(mutable.immutable().first)
+        .getProxyCredentials(mutable.uuid)
 
     override suspend fun testConnection(): String? = HacHttpClient.getInstance(project).testConnection(
         HacConnectionSettingsState(
@@ -101,10 +101,10 @@ class HacConnectionSettingsDialog(
                 ?: ExecConstants.DEFAULT_SESSION_COOKIE_NAME,
             proxyAuthMode = mutable.proxyAuthMode.get()
         ),
-        mutable.username.get(),
-        mutable.password.get(),
-        mutable.proxyUsername.get(),
-        mutable.proxyPassword.get()
+        mutable.credentials.username.get(),
+        mutable.credentials.password.get(),
+        mutable.proxyCredentials.username.get(),
+        mutable.proxyCredentials.password.get()
     )
         .let {
             when {
@@ -112,6 +112,24 @@ class HacConnectionSettingsDialog(
                 else -> null
             }
         }
+
+    override fun apply(original: HacConnectionSettingsState.Mutable, mutable: HacConnectionSettingsState.Mutable) = with(original) {
+        apply(mutable, { it.scope }, { scope = it })
+        apply(mutable, { it.timeout }, { timeout = it })
+        apply(mutable, { it.sessionCookieName }, { sessionCookieName = it })
+        apply(mutable, { it.name.get() }, { name.set(it) })
+        apply(mutable, { it.host.get() }, { host.set(it) })
+        apply(mutable, { it.port.get() }, { port.set(it) })
+        apply(mutable, { it.webroot.get() }, { webroot.set(it) })
+        apply(mutable, { it.ssl.get() }, { ssl.set(it) })
+        apply(mutable, { it.wsl.get() }, { wsl.set(it) })
+        apply(mutable, { it.authMode.get() }, { authMode.set(it) })
+        apply(mutable, { it.proxyAuthMode.get() }, { proxyAuthMode.set(it) })
+        apply(mutable, { it.sslProtocol.get() }, { sslProtocol.set(it) })
+
+        apply(mutable, { it.credentials }, { credentials.apply(it) })
+        apply(mutable, { it.proxyCredentials }, { proxyCredentials.apply(it) })
+    }
 
     override fun panel() = panel {
         val configurationProviders = HacConnectionSettingsProvider.EP.extensionList
@@ -290,15 +308,15 @@ class HacConnectionSettingsDialog(
             row {
                 proxyUsernameTextField = textField()
                     .label("Username:")
-                    .bindText(mutable.proxyUsername)
-                    .enabledIf(editableCredentials)
+                    .bindText(mutable.proxyCredentials.username)
+                    .enabledIf(editableProxyCredentials)
                     .visibleIf(mutable.proxyAuthMode.equalsTo(ProxyAuthMode.BASIC))
                     .component
 
                 proxyPasswordTextField = passwordField()
                     .label("Password:")
-                    .bindText(mutable.proxyPassword)
-                    .enabledIf(editableCredentials)
+                    .bindText(mutable.proxyCredentials.password)
+                    .enabledIf(editableProxyCredentials)
                     .visibleIf(mutable.proxyAuthMode.equalsTo(ProxyAuthMode.BASIC))
                     .component
             }
@@ -318,7 +336,7 @@ class HacConnectionSettingsDialog(
         row {
             text(
                 """
-                Authentication via Browser will take place on API request to hAC.
+                Authentication via Browser will take place on API request to HAC.
                 <br>Single browser instance, as a result authentication is shared within the domain.
                 <br>IDE restart may be required to renew authentication in some circumstances.
                 """.trimIndent()
@@ -333,7 +351,7 @@ class HacConnectionSettingsDialog(
             row {
                 usernameTextField = textField()
                     .label("Username:")
-                    .bindText(mutable.username)
+                    .bindText(mutable.credentials.username)
                     .enabledIf(editableCredentials)
                     .visibleIf(mutable.authMode.equalsTo(AuthMode.AUTOMATIC))
                     .addValidationRule("Username cannot be blank.") {
@@ -343,7 +361,7 @@ class HacConnectionSettingsDialog(
 
                 passwordTextField = passwordField()
                     .label("Password:")
-                    .bindText(mutable.password)
+                    .bindText(mutable.credentials.password)
                     .enabledIf(editableCredentials)
                     .visibleIf(mutable.authMode.equalsTo(AuthMode.AUTOMATIC))
                     .addValidationRule("Password cannot be blank.") {
@@ -454,7 +472,7 @@ class HacConnectionSettingsDialog(
             textSupplier = {
                 """?
                     You can choose one of the authentication modes for integration with ${code("HAC")}.
-                    <br><br>With the ${icon(AuthMode.AUTOMATIC.icon)} ${code(AuthMode.AUTOMATIC.shortTitle)} the Plugin will rely on the specified persisted credentials to authenticate and renew connection to hAC.
+                    <br><br>With the ${icon(AuthMode.AUTOMATIC.icon)} ${code(AuthMode.AUTOMATIC.shortTitle)} the Plugin will rely on the specified persisted credentials to authenticate and renew connection to HAC.
                     <br><br>Whereas with the ${icon(AuthMode.MANUAL.icon)} ${code(AuthMode.MANUAL.shortTitle)} credentials will not be persisted and you will be asked for authentication via Browser every time when it is required.
                     This mode also supports http basic authorization of the connection (e.g. ${code("nginx")} reverse proxy). 
                 """.trimIndent()

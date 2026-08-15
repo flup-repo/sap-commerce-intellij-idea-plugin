@@ -1,6 +1,6 @@
 /*
  * This file is part of "SAP Commerce Developers Toolset" plugin for IntelliJ IDEA.
- * Copyright (C) 2019-2025 EPAM Systems <hybrisideaplugin@epam.com> and contributors
+ * Copyright (C) 2019-2026 EPAM Systems <hybrisideaplugin@epam.com> and contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as
@@ -24,16 +24,14 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import sap.commerce.toolset.HybrisConstants
 import sap.commerce.toolset.exec.ExecConnectionService
-import sap.commerce.toolset.exec.settings.state.ExecConnectionCredentials
 import sap.commerce.toolset.exec.settings.state.ExecConnectionScope
-import sap.commerce.toolset.exec.settings.state.obsoleteFor
 import sap.commerce.toolset.hac.exec.settings.HacExecDeveloperSettings
 import sap.commerce.toolset.hac.exec.settings.HacExecProjectSettings
 import sap.commerce.toolset.hac.exec.settings.event.HacConnectionSettingsListener
 import sap.commerce.toolset.hac.exec.settings.state.HacConnectionSettingsState
 
 @Service(Service.Level.PROJECT)
-class HacExecConnectionService(project: Project) : ExecConnectionService<HacConnectionSettingsState>(project) {
+class HacExecConnectionService(project: Project) : ExecConnectionService<HacConnectionSettingsState, HacConnectionSettingsState.Snapshot>(project) {
 
     private val lock = Any()
 
@@ -60,45 +58,44 @@ class HacExecConnectionService(project: Project) : ExecConnectionService<HacConn
     override val listener: HacConnectionSettingsListener
         get() = project.messageBus.syncPublisher(HacConnectionSettingsListener.TOPIC)
 
-    override fun create(settings: Pair<HacConnectionSettingsState, ExecConnectionCredentials?>, notify: Boolean) = when (settings.first.scope) {
+    override fun create(snapshot: HacConnectionSettingsState.Snapshot, notify: Boolean) = when (snapshot.state.scope) {
         ExecConnectionScope.PROJECT_PERSONAL -> with(HacExecDeveloperSettings.getInstance(project)) {
-            connections = connections + settings.first
+            connections = connections + snapshot.state
 
-            onCreate(settings, notify)
+            onCreate(snapshot, notify)
         }
 
         ExecConnectionScope.PROJECT -> with(HacExecProjectSettings.getInstance(project)) {
-            connections = connections + settings.first
+            connections = connections + snapshot.state
 
-            onCreate(settings, notify)
+            onCreate(snapshot, notify)
         }
     }
 
-    override fun delete(settings: HacConnectionSettingsState, notify: Boolean, purgeCredentials: Boolean) {
+    override fun delete(state: HacConnectionSettingsState) {
         val developerSettings = HacExecDeveloperSettings.getInstance(project)
         val projectSettings = HacExecProjectSettings.getInstance(project)
         developerSettings.connections = developerSettings.connections
-            .filterNot { it.uuid == settings.uuid }
+            .filterNot { it.uuid == state.uuid }
         projectSettings.connections = projectSettings.connections
-            .filterNot { it.uuid == settings.uuid }
-
-        onDelete(settings, notify, purgeCredentials)
+            .filterNot { it.uuid == state.uuid }
     }
 
-    override fun save(settings: Map<HacConnectionSettingsState, ExecConnectionCredentials?>) {
-        val groupedSettings = settings.keys.groupBy { it.scope }
+    override fun save(snapshots: Collection<HacConnectionSettingsState.Snapshot>) {
+        val groupedSettings = snapshots.map { it.state }.groupBy { it.scope }
         val projectSettings = HacExecProjectSettings.getInstance(project)
         val developerSettings = HacExecDeveloperSettings.getInstance(project)
 
         // remove persisted credentials only for the connections which are gone
+        val statesToSave = snapshots.map { it.state.uuid }
         (projectSettings.connections + developerSettings.connections)
-            .obsoleteFor(settings.keys)
+            .filterNot { statesToSave.contains(it.uuid) }
             .forEach { removeCredentials(it) }
 
         projectSettings.connections = groupedSettings.getOrElse(ExecConnectionScope.PROJECT) { emptyList() }
         developerSettings.connections = groupedSettings.getOrElse(ExecConnectionScope.PROJECT_PERSONAL) { emptyList() }
 
-        onSave(settings)
+        onSave(snapshots)
     }
 
     override fun default() = HacConnectionSettingsState(
@@ -106,7 +103,7 @@ class HacExecConnectionService(project: Project) : ExecConnectionService<HacConn
         webroot = getPropertyOrDefault(project, HybrisConstants.PROPERTY_HAC_WEBROOT, ""),
     )
 
-    override fun defaultCredentials(settings: HacConnectionSettingsState) = Credentials(
+    override fun defaultCredentials() = Credentials(
         "admin",
         getPropertyOrDefault(project, HybrisConstants.PROPERTY_ADMIN_INITIAL_PASSWORD, "nimda")
     )
