@@ -21,7 +21,7 @@ package sap.commerce.toolset.flexibleSearch.mcp
 object FxSMcpConstants {
 
     object Descriptions {
-        const val MAX_COUNT = "Maximum number of result rows to return. Default is 200"
+        const val MAX_COUNT = "Maximum number of result rows to return, enforced by the server. Default is 200"
         const val LOCALE = "Optional locale for the query. Default is 'en'"
         const val DATA_SOURCE = "Optional data source for the query. Default is 'master'"
         const val USER = "Optional user to execute the query as. Default uses the current session user"
