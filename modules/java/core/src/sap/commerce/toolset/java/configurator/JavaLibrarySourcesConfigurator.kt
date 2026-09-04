@@ -295,9 +295,11 @@ class JavaLibrarySourcesConfigurator : ProjectPostImportConfigurator {
             reportProgressScope {
                 it.itemStep("Downloading ${targetFile.name}") {
                     retryHttp {
-                        HttpRequests
-                            .request(artifactSourceUrl)
-                            .saveToFile(tmp, null)
+                        withContext(Dispatchers.IO) {
+                            HttpRequests
+                                .request(artifactSourceUrl)
+                                .saveToFile(tmp, null)
+                        }
                     }
                 }
             }
