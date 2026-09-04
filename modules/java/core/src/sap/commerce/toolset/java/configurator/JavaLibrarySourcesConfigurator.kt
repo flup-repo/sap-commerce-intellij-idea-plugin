@@ -45,6 +45,7 @@ import com.intellij.util.io.delete
 import kotlinx.coroutines.*
 import sap.commerce.toolset.Notifications
 import sap.commerce.toolset.java.jarFinder.LibraryRootLookup
+import sap.commerce.toolset.java.jarFinder.LibraryRootLookupCache
 import sap.commerce.toolset.java.jarFinder.LibraryRootLookupScope
 import sap.commerce.toolset.java.jarFinder.LibraryRootLookupService
 import sap.commerce.toolset.java.jarFinder.LibraryRootType
@@ -93,10 +94,18 @@ class JavaLibrarySourcesConfigurator : ProjectPostImportConfigurator {
             return
         }
 
+        val lookupCache = LibraryRootLookupCache(librarySourceDir)
+
         CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
             withBackgroundProgress(project, "Fetching libraries sources...", true) {
                 supervisorScope {
-                    val libraries = processLibraries(context, lookupRepositories, librarySourceDir, libraryRootTypes)
+                    withContext(Dispatchers.IO) { lookupCache.load(lookupRepositories) }
+
+                    val libraries = try {
+                        processLibraries(context, lookupCache, lookupRepositories, librarySourceDir, libraryRootTypes)
+                    } finally {
+                        withContext(NonCancellable + Dispatchers.IO) { lookupCache.flush() }
+                    }
 
                     updateLibraries(context, libraries, librarySourceDir)
                 }
@@ -106,6 +115,7 @@ class JavaLibrarySourcesConfigurator : ProjectPostImportConfigurator {
 
     private suspend fun processLibraries(
         context: ProjectPostImportContext,
+        lookupCache: LibraryRootLookupCache,
         lookupRepositories: List<String>,
         librarySourceDir: Path,
         libraryRootTypes: Set<LibraryRootType>
@@ -125,7 +135,7 @@ class JavaLibrarySourcesConfigurator : ProjectPostImportConfigurator {
                             libraryEntity.name,
                             libraryEntity.tableId
                         )
-                        libraryId to fetchSources(context, lookupRepositories, librarySourceDir, libraryRootTypes, libraryEntity, reporter)
+                        libraryId to fetchSources(context, lookupCache, lookupRepositories, librarySourceDir, libraryRootTypes, libraryEntity, reporter)
                     }
                 }
                 .awaitAll()
@@ -191,6 +201,7 @@ class JavaLibrarySourcesConfigurator : ProjectPostImportConfigurator {
 
     private suspend fun fetchSources(
         context: ProjectPostImportContext,
+        lookupCache: LibraryRootLookupCache,
         lookupRepositories: List<String>,
         librarySourceDir: Path,
         libraryRootTypes: Set<LibraryRootType>,
@@ -200,12 +211,13 @@ class JavaLibrarySourcesConfigurator : ProjectPostImportConfigurator {
         checkCanceled()
 
         return reporter.itemStep("Fetching sources for library '${library.name}'...") {
-            library.roots.flatMap { libraryRoot -> processLibraryRoot(context, lookupRepositories, librarySourceDir, libraryRootTypes, libraryRoot) }
+            library.roots.flatMap { libraryRoot -> processLibraryRoot(context, lookupCache, lookupRepositories, librarySourceDir, libraryRootTypes, libraryRoot) }
         }
     }
 
     private suspend fun processLibraryRoot(
         context: ProjectPostImportContext,
+        lookupCache: LibraryRootLookupCache,
         lookupRepositories: List<String>,
         librarySourceDir: Path,
         libraryRootTypes: Set<LibraryRootType>,
@@ -228,7 +240,7 @@ class JavaLibrarySourcesConfigurator : ProjectPostImportConfigurator {
                 libraryJars.map { libraryJar ->
                     async {
                         reporter.itemStep("Fetching sources for '${libraryJar.nameWithoutExtension}'...") {
-                            fetchLibrarySourcesJars(context, lookupRepositories, librarySourceDir, libraryRootTypes, libraryJar)
+                            fetchLibrarySourcesJars(context, lookupCache, lookupRepositories, librarySourceDir, libraryRootTypes, libraryJar)
                         }
                     }
                 }
@@ -240,6 +252,7 @@ class JavaLibrarySourcesConfigurator : ProjectPostImportConfigurator {
 
     private suspend fun fetchLibrarySourcesJars(
         context: ProjectPostImportContext,
+        lookupCache: LibraryRootLookupCache,
         lookupRepositories: List<String>,
         librarySourceDir: Path,
         libraryRootTypes: Set<LibraryRootType>,
@@ -262,7 +275,7 @@ class JavaLibrarySourcesConfigurator : ProjectPostImportConfigurator {
 
         if (context.settings.librarySourcesFetchMode == LibrarySourcesFetchMode.REMOTE) {
             // find and set urls for each not yet downloaded source jar
-            LibraryRootLookupService.getService().findJarUrls(lookupRepositories, libraryJar, missingLibraryRootLookups)
+            LibraryRootLookupService.getService().findJarUrls(lookupCache, lookupRepositories, libraryJar, missingLibraryRootLookups)
 
             // download not yet downloaded source jars
             missingLibraryRootLookups.forEach { libraryRootLookup ->

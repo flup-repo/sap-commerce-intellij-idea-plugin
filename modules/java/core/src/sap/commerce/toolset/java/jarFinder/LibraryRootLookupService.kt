@@ -17,7 +17,8 @@
  */
 package sap.commerce.toolset.java.jarFinder
 
-import com.intellij.openapi.components.*
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.checkCanceled
 import com.intellij.openapi.vfs.VfsUtilCore
@@ -29,8 +30,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import sap.commerce.toolset.HybrisConstants
-import sap.commerce.toolset.java.settings.state.LibraryRootLookupState
 import sap.commerce.toolset.util.fileExists
 import java.io.File
 import java.io.IOException
@@ -43,26 +42,27 @@ import java.util.jar.JarFile
 /**
  * Custom implementation of the maven artifact searcher required to support caching and advanced groupId identification and better artifact search by hash.
  */
-@State(
-    name = "[y] Library Root Lookup",
-    category = SettingsCategory.PLUGINS,
-    storages = [Storage(value = HybrisConstants.STORAGE_HYBRIS_LIBRARY_ROOT_LOOKUP, roamingType = RoamingType.LOCAL)]
-)
 @Service
-class LibraryRootLookupService : SerializablePersistentStateComponent<LibraryRootLookupState>(LibraryRootLookupState()) {
+class LibraryRootLookupService {
 
-    suspend fun findJarUrls(lookupRepositories: List<String>, libraryJar: VirtualFile, libraryRootLookups: Collection<LibraryRootLookup>) {
+    suspend fun findJarUrls(
+        lookupCache: LibraryRootLookupCache,
+        lookupRepositories: List<String>,
+        libraryJar: VirtualFile,
+        libraryRootLookups: Collection<LibraryRootLookup>
+    ) {
         if (libraryRootLookups.isEmpty()) return
 
         checkCanceled()
 
-        val artifactKey = artifactKey(libraryJar.name, libraryJar.length)
+        val artifactKey = lookupCache.artifactKey(libraryJar.name, libraryJar.length)
         val lookups = libraryRootLookups
-            .filterNot { isKnownAbsent(artifactKey, it.type) }
+            .filterNot { lookupCache.isKnownAbsent(artifactKey, it.type) }
             .takeIf { it.isNotEmpty() }
             ?: return
-        val mavenArtifactCoords = findMavenArtifactCoords(lookupRepositories, libraryJar, artifactKey) ?: return
+        val mavenArtifactCoords = findMavenArtifactCoords(lookupCache, lookupRepositories, libraryJar, artifactKey) ?: return
 
+        // sources and javadocs are resolved independently, an artifact may provide only one of them
         lookups.forEach {
             checkCanceled()
 
@@ -70,33 +70,44 @@ class LibraryRootLookupService : SerializablePersistentStateComponent<LibraryRoo
 
             it.url = remoteLookup.url
 
-            if (remoteLookup.absent) rememberAbsent(artifactKey, it.type)
+            if (remoteLookup.absent) lookupCache.rememberAbsent(artifactKey, it.type)
         }
     }
 
     private suspend fun findMavenArtifactCoords(
+        lookupCache: LibraryRootLookupCache,
         lookupRepositories: List<String>,
         libraryJar: VirtualFile,
         artifactKey: String
     ): MavenArtifactCoords? {
-        knownArtifactCoords(artifactKey)?.let { return it }
+        lookupCache.knownArtifactCoords(artifactKey)?.let { return it }
 
         // most common approach -> maven packaging META-INF/maven
-        val localMavenCoords = readMavenCoordsFromArchive(libraryJar)
-        // example: accessors-smart-2.5.2.jar
+        val localCoords = readMavenCoordsFromArchive(libraryJar)
+            // example: accessors-smart-2.5.2.jar
             ?: guessByBundleInManifestMF(libraryJar)
             // example: activation-1.1.1.jar
             ?: guessByExtensionNameInManifestMF(libraryJar)
+        val mavenArtifactCoords = localCoords?.takeIf { availableInRemote(lookupRepositories, it) }
+            // if nothing helps -> fallback to search by SHA1 of the respective jar file
+            ?: findMavenArtifactCoordsBySha1(lookupRepositories, libraryJar)
+            ?: return null
 
-        // cache it only if artifact exists in remote
-        return (localMavenCoords
-            ?.takeIf { findRemote(lookupRepositories) { baseUrl -> it.toUrl(baseUrl) }.url != null }
-        // if nothing helps -> fallback to search by SHA1 of the respective jar file
-            ?: getExternalMavenCoords(libraryJar)
-                ?.let { MavenArtifactCoords.from(it) }
-                ?.takeIf { findRemote(lookupRepositories) { baseUrl -> it.toUrl(baseUrl) }.url != null })
-            ?.also { rememberArtifactCoords(artifactKey, it) }
+        // remember it only if the artifact exists in remote
+        lookupCache.rememberArtifactCoords(artifactKey, mavenArtifactCoords)
+
+        return mavenArtifactCoords
     }
+
+    private suspend fun findMavenArtifactCoordsBySha1(lookupRepositories: List<String>, libraryJar: VirtualFile): MavenArtifactCoords? {
+        val solrCoords = getExternalMavenCoords(libraryJar) ?: return null
+        val mavenArtifactCoords = MavenArtifactCoords.from(solrCoords)
+
+        return mavenArtifactCoords.takeIf { availableInRemote(lookupRepositories, it) }
+    }
+
+    private suspend fun availableInRemote(lookupRepositories: List<String>, mavenArtifactCoords: MavenArtifactCoords) =
+        findRemote(lookupRepositories) { baseUrl -> mavenArtifactCoords.toUrl(baseUrl) }.url != null
 
     private suspend fun getExternalMavenCoords(libraryJar: VirtualFile): SolrMavenArtifactCoords? {
         checkCanceled()
@@ -258,38 +269,6 @@ class LibraryRootLookupService : SerializablePersistentStateComponent<LibraryRoo
         }
 
         return null
-    }
-
-    /**
-     * Identity of a library jar, the size is taken into account to invalidate the outcome once the jar is replaced.
-     */
-    internal fun artifactKey(name: String, length: Long) = "$name$DELIMITER$length"
-
-    internal fun isKnownAbsent(artifactKey: String, libraryRootType: LibraryRootType) = state.absentRootTypes[artifactKey]
-        ?.contains(libraryRootType.name) == true
-
-    internal fun rememberAbsent(artifactKey: String, libraryRootType: LibraryRootType) {
-        updateState { state ->
-            val absentRootTypes = state.absentRootTypes[artifactKey]
-                ?.plus(libraryRootType.name)
-                ?: setOf(libraryRootType.name)
-
-            state.copy(absentRootTypes = state.absentRootTypes + (artifactKey to absentRootTypes))
-        }
-    }
-
-    internal fun knownArtifactCoords(artifactKey: String) = state.artifactCoords[artifactKey]
-        ?.split(DELIMITER)
-        ?.takeIf { it.size == 3 }
-        ?.let { MavenArtifactCoords(it[0], it[1], it[2], "cache") }
-
-    internal fun rememberArtifactCoords(artifactKey: String, mavenArtifactCoords: MavenArtifactCoords) {
-        val serialized = with(mavenArtifactCoords) { listOf(groupId, artifactId, version) }
-            .takeIf { parts -> parts.none { it.contains(DELIMITER) } }
-            ?.joinToString(DELIMITER)
-            ?: return
-
-        updateState { it.copy(artifactCoords = it.artifactCoords + (artifactKey to serialized)) }
     }
 
     private fun File.sha1(): String {
