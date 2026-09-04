@@ -7,7 +7,7 @@
 - Report row count and reached `maxCount` limit in the FlexibleSearch and SQL MCP tool results [#2000](https://github.com/epam/sap-commerce-intellij-idea-plugin/pull/2000)
 
 ### `Project Import` enhancements
-- Speed up the libraries sources and javadocs fetching by remembering the previous lookup outcome and no longer blocking the shared background threads
+- Speed up the libraries sources and javadocs fetching by remembering the previous lookup outcome and no longer blocking the shared background threads [#2002](https://github.com/epam/sap-commerce-intellij-idea-plugin/pull/2002)
 
 ## [2026.2.3]
 
